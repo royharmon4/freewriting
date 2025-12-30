@@ -1,0 +1,713 @@
+<!--
+Run instructions:
+- Open this file directly in a modern Chromium browser (Edge/Chrome), or run:
+  python3 -m http.server 8000
+  then visit http://localhost:8000/index.html
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Freewriting</title>
+  <style>
+    :root {
+      --bg: #f7f5f0;
+      --ink: #1e1e1e;
+      --muted: #666;
+      --panel: #ffffff;
+      --shadow: rgba(0, 0, 0, 0.08);
+      --dot-red: #d64545;
+      --dot-amber: #e0a64b;
+      --dot-green: #3aa76d;
+      --dot-dark: #111;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .app {
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      padding: 16px 20px;
+      gap: 20px;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    button, .toggle {
+      font-size: 14px;
+    }
+
+    button {
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      background: var(--panel);
+      cursor: pointer;
+      box-shadow: 0 1px 2px var(--shadow);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px;
+      border-radius: 6px;
+      background: var(--panel);
+      border: 1px solid #ccc;
+      box-shadow: 0 1px 2px var(--shadow);
+    }
+
+    .toggle input {
+      accent-color: #333;
+    }
+
+    .timer-controls {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .countdown {
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+      min-width: 60px;
+      text-align: center;
+    }
+
+    .page-wrapper {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+
+    .page {
+      width: min(900px, 90vw);
+      height: min(70vh, 700px);
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+      padding: 40px;
+      position: relative;
+      overflow: hidden;
+      font-family: "Courier New", Courier, monospace;
+    }
+
+    #textLayer {
+      position: absolute;
+      inset: 40px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 18px;
+      line-height: 1.5;
+      color: var(--ink);
+      transform: translateY(0);
+    }
+
+    #cursor {
+      position: absolute;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--dot-red);
+      transform: translate(0, 0);
+      pointer-events: none;
+    }
+
+    #cursor.state-amber {
+      background: var(--dot-amber);
+      animation: pulse 1.8s ease-in-out infinite;
+    }
+
+    #cursor.state-green {
+      background: var(--dot-green);
+      animation: pulse 1s ease-in-out infinite;
+    }
+
+    #cursor.state-red {
+      background: var(--dot-red);
+    }
+
+    #cursor.state-dark {
+      background: var(--dot-dark);
+    }
+
+    #cursor.wobble {
+      animation: pulse 0.7s ease-in-out infinite, wobble 0.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        transform: scale(1) translate(var(--cursor-x), var(--cursor-y));
+      }
+      50% {
+        transform: scale(1.25) translate(var(--cursor-x), var(--cursor-y));
+      }
+    }
+
+    @keyframes wobble {
+      0%, 100% {
+        filter: none;
+      }
+      50% {
+        filter: blur(0.4px);
+      }
+    }
+
+    .hidden-input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+      height: 0;
+      width: 0;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.4);
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-backdrop.active {
+      display: flex;
+    }
+
+    .modal {
+      background: #fff;
+      padding: 20px;
+      border-radius: 12px;
+      min-width: 280px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .modal button {
+      width: 100%;
+    }
+
+    .status {
+      font-size: 13px;
+      color: var(--muted);
+      min-height: 18px;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="controls">
+        <button id="startStop">Start</button>
+      </div>
+      <div class="controls">
+        <label class="toggle">
+          <input type="checkbox" id="timerToggle" checked />
+          Timer
+        </label>
+        <div class="timer-controls" id="timerControls">
+          <button id="minusMinute" type="button">-1 min</button>
+          <div class="countdown" id="countdown">10:00</div>
+          <button id="plusMinute" type="button">+1 min</button>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="showToggle" />
+          Show typed text
+        </label>
+      </div>
+    </header>
+
+    <div class="page-wrapper">
+      <div class="page" id="pageArea" tabindex="-1">
+        <pre id="textLayer"></pre>
+        <div id="cursor" class="state-red"></div>
+      </div>
+    </div>
+  </div>
+
+  <textarea class="hidden-input" id="inputSink" aria-hidden="true"></textarea>
+
+  <div class="modal-backdrop" id="modalBackdrop" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal" role="document">
+      <div class="status" id="modalStatus">Session ended.</div>
+      <button id="copyBtn" type="button">Copy to Clipboard</button>
+      <button id="saveBtn" type="button">Save to File</button>
+      <button id="discardBtn" type="button">Discard</button>
+      <button id="newSessionBtn" type="button">New Session</button>
+      <button id="closeModalBtn" type="button">Close</button>
+    </div>
+  </div>
+
+  <script>
+    const startStopBtn = document.getElementById('startStop');
+    const timerToggle = document.getElementById('timerToggle');
+    const showToggle = document.getElementById('showToggle');
+    const countdownEl = document.getElementById('countdown');
+    const timerControls = document.getElementById('timerControls');
+    const minusMinute = document.getElementById('minusMinute');
+    const plusMinute = document.getElementById('plusMinute');
+    const textLayer = document.getElementById('textLayer');
+    const cursor = document.getElementById('cursor');
+    const pageArea = document.getElementById('pageArea');
+    const inputSink = document.getElementById('inputSink');
+    const modalBackdrop = document.getElementById('modalBackdrop');
+    const modalStatus = document.getElementById('modalStatus');
+    const copyBtn = document.getElementById('copyBtn');
+    const saveBtn = document.getElementById('saveBtn');
+    const discardBtn = document.getElementById('discardBtn');
+    const newSessionBtn = document.getElementById('newSessionBtn');
+    const closeModalBtn = document.getElementById('closeModalBtn');
+
+    let buffer = '';
+    let sessionActive = false;
+    let sessionRevealAllowedAtStart = false;
+    let timerEnabled = true;
+    let timerSeconds = 600;
+    let remainingSeconds = timerSeconds;
+    let timerInterval = null;
+    let flowInterval = null;
+    let keyTimestamps = [];
+    let lastKeyTime = 0;
+    let violationDark = false;
+    let scrollOffset = 0;
+    let charWidth = 10;
+    let lineHeight = 24;
+    let maxCols = 60;
+    let maxRows = 20;
+    let sessionEndedByTimer = false;
+    let focusTrapElements = [];
+    let previouslyFocused = null;
+
+    const forbiddenKeys = new Set([
+      'Backspace',
+      'Delete',
+      'ArrowLeft',
+      'ArrowRight',
+      'ArrowUp',
+      'ArrowDown',
+      'Home',
+      'End',
+      'PageUp',
+      'PageDown'
+    ]);
+
+    function updateMetrics() {
+      const probe = document.createElement('span');
+      probe.textContent = 'M';
+      probe.style.visibility = 'hidden';
+      probe.style.position = 'absolute';
+      probe.style.fontFamily = '"Courier New", Courier, monospace';
+      probe.style.fontSize = '18px';
+      document.body.appendChild(probe);
+      const rect = probe.getBoundingClientRect();
+      charWidth = rect.width || 10;
+      lineHeight = rect.height * 1.5;
+      document.body.removeChild(probe);
+      const pageRect = pageArea.getBoundingClientRect();
+      const innerWidth = pageRect.width - 80;
+      const innerHeight = pageRect.height - 80;
+      maxCols = Math.max(1, Math.floor(innerWidth / charWidth));
+      maxRows = Math.max(1, Math.floor(innerHeight / lineHeight));
+    }
+
+    function formatTime(seconds) {
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+
+    function updateCountdown() {
+      countdownEl.textContent = formatTime(remainingSeconds);
+    }
+
+    function updateTimerControls() {
+      timerEnabled = timerToggle.checked;
+      timerControls.style.display = timerEnabled ? 'inline-flex' : 'none';
+    }
+
+    function computeCursorPosition() {
+      let row = 0;
+      let col = 0;
+      for (const ch of buffer) {
+        if (ch === '\n') {
+          row += 1;
+          col = 0;
+        } else {
+          col += 1;
+          if (col >= maxCols) {
+            row += 1;
+            col = 0;
+          }
+        }
+      }
+      return { row, col };
+    }
+
+    function updateScroll(row) {
+      if (row - Math.floor(scrollOffset / lineHeight) >= maxRows) {
+        scrollOffset += lineHeight;
+      }
+      if (row - Math.floor(scrollOffset / lineHeight) < 0) {
+        scrollOffset = Math.max(0, scrollOffset - lineHeight);
+      }
+    }
+
+    function shouldRevealText() {
+      if (sessionEndedByTimer) {
+        return true;
+      }
+      if (sessionActive) {
+        if (!sessionRevealAllowedAtStart) {
+          return false;
+        }
+        return showToggle.checked;
+      }
+      return sessionRevealAllowedAtStart && showToggle.checked;
+    }
+
+    function renderText() {
+      textLayer.textContent = shouldRevealText() ? buffer : '';
+      textLayer.style.transform = `translateY(${-scrollOffset}px)`;
+    }
+
+    function updateCursor() {
+      updateMetrics();
+      const { row, col } = computeCursorPosition();
+      updateScroll(row);
+      const x = 40 + col * charWidth;
+      const y = 40 + row * lineHeight - scrollOffset;
+      cursor.style.setProperty('--cursor-x', `${x}px`);
+      cursor.style.setProperty('--cursor-y', `${y}px`);
+      cursor.style.transform = `translate(${x}px, ${y}px)`;
+      renderText();
+    }
+
+    function setCursorState(state, wobble = false) {
+      cursor.classList.remove('state-red', 'state-amber', 'state-green', 'state-dark', 'wobble');
+      cursor.classList.add(state);
+      if (wobble) {
+        cursor.classList.add('wobble');
+      }
+    }
+
+    function updateFlowState() {
+      if (!sessionActive) {
+        setCursorState('state-red');
+        return;
+      }
+      if (violationDark) {
+        setCursorState('state-dark');
+        return;
+      }
+      const now = Date.now();
+      keyTimestamps = keyTimestamps.filter((t) => now - t <= 5000);
+      const idle = now - lastKeyTime > 3000;
+      const cps = keyTimestamps.length / 5;
+      const wpm = cps * 60 / 5;
+      if (idle || wpm < 10) {
+        setCursorState('state-red');
+      } else if (wpm <= 25) {
+        setCursorState('state-amber');
+      } else {
+        setCursorState('state-green', wpm > 45);
+      }
+    }
+
+    function markViolation() {
+      violationDark = true;
+      setCursorState('state-dark');
+    }
+
+    function clearViolation() {
+      if (violationDark) {
+        violationDark = false;
+        keyTimestamps = [];
+        lastKeyTime = Date.now();
+        setCursorState('state-red');
+      }
+    }
+
+    function handleValidInput(char) {
+      clearViolation();
+      buffer += char;
+      const now = Date.now();
+      keyTimestamps.push(now);
+      lastKeyTime = now;
+      updateCursor();
+    }
+
+    function startSession() {
+      sessionActive = true;
+      sessionEndedByTimer = false;
+      sessionRevealAllowedAtStart = showToggle.checked;
+      remainingSeconds = timerSeconds;
+      updateCountdown();
+      startStopBtn.textContent = 'Stop';
+      timerToggle.disabled = true;
+      showToggle.disabled = false;
+      minusMinute.disabled = true;
+      plusMinute.disabled = true;
+      inputSink.focus();
+      if (timerEnabled) {
+        timerInterval = setInterval(() => {
+          remainingSeconds -= 1;
+          if (remainingSeconds <= 0) {
+            remainingSeconds = 0;
+            updateCountdown();
+            stopSession(true);
+            return;
+          }
+          updateCountdown();
+        }, 1000);
+      }
+      flowInterval = setInterval(updateFlowState, 200);
+      updateCursor();
+    }
+
+    function stopSession(timerEnded = false) {
+      if (!sessionActive) {
+        return;
+      }
+      sessionActive = false;
+      sessionEndedByTimer = timerEnded;
+      clearInterval(timerInterval);
+      clearInterval(flowInterval);
+      timerInterval = null;
+      flowInterval = null;
+      startStopBtn.textContent = 'Start';
+      timerToggle.disabled = false;
+      minusMinute.disabled = false;
+      plusMinute.disabled = false;
+      showToggle.disabled = false;
+      updateFlowState();
+      updateCursor();
+      showModal(timerEnded ? 'Timer ended.' : 'Session ended.');
+    }
+
+    function resetSession() {
+      buffer = '';
+      scrollOffset = 0;
+      keyTimestamps = [];
+      lastKeyTime = 0;
+      violationDark = false;
+      sessionEndedByTimer = false;
+      sessionRevealAllowedAtStart = false;
+      updateCursor();
+      updateFlowState();
+    }
+
+    function showModal(message) {
+      modalStatus.textContent = message;
+      modalBackdrop.classList.add('active');
+      modalBackdrop.setAttribute('aria-hidden', 'false');
+      previouslyFocused = document.activeElement;
+      focusTrapElements = Array.from(modalBackdrop.querySelectorAll('button'));
+      focusTrapElements[0]?.focus();
+    }
+
+    function closeModal() {
+      modalBackdrop.classList.remove('active');
+      modalBackdrop.setAttribute('aria-hidden', 'true');
+      if (previouslyFocused) {
+        previouslyFocused.focus();
+      }
+    }
+
+    function trapFocus(event) {
+      if (!modalBackdrop.classList.contains('active')) {
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeModal();
+        return;
+      }
+      if (event.key !== 'Tab') {
+        return;
+      }
+      const first = focusTrapElements[0];
+      const last = focusTrapElements[focusTrapElements.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    function adjustTimer(deltaMinutes) {
+      timerSeconds = Math.max(60, timerSeconds + deltaMinutes * 60);
+      remainingSeconds = timerSeconds;
+      updateCountdown();
+    }
+
+    function handleCopy() {
+      navigator.clipboard.writeText(buffer).then(() => {
+        modalStatus.textContent = 'Copied to clipboard.';
+      }).catch(() => {
+        modalStatus.textContent = 'Clipboard unavailable. Please try again.';
+      });
+    }
+
+    function handleSave() {
+      const blob = new Blob([buffer], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const now = new Date();
+      const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `freewrite_${timestamp}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      modalStatus.textContent = 'File saved.';
+    }
+
+    function handleDiscard() {
+      resetSession();
+      closeModal();
+    }
+
+    function handleNewSession() {
+      resetSession();
+      closeModal();
+    }
+
+    function isPrintableKey(event) {
+      if (event.ctrlKey || event.metaKey || event.altKey) {
+        return false;
+      }
+      return event.key.length === 1;
+    }
+
+    function handleKeyDown(event) {
+      if (!sessionActive) {
+        return;
+      }
+
+      if (event.ctrlKey && event.key === 'Enter') {
+        event.preventDefault();
+        stopSession(false);
+        return;
+      }
+
+      if (forbiddenKeys.has(event.key)) {
+        event.preventDefault();
+        markViolation();
+        return;
+      }
+
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        handleValidInput('\n');
+        return;
+      }
+
+      if (isPrintableKey(event)) {
+        event.preventDefault();
+        handleValidInput(event.key);
+        return;
+      }
+
+      if (event.key === 'Tab') {
+        event.preventDefault();
+        return;
+      }
+
+      event.preventDefault();
+    }
+
+    function handleMouseDown(event) {
+      if (!sessionActive) {
+        return;
+      }
+      event.preventDefault();
+      markViolation();
+    }
+
+    function handleBeforeUnload(event) {
+      if (sessionActive) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    }
+
+    startStopBtn.addEventListener('click', () => {
+      if (sessionActive) {
+        stopSession(false);
+      } else {
+        startSession();
+      }
+    });
+
+    timerToggle.addEventListener('change', () => {
+      updateTimerControls();
+    });
+
+    showToggle.addEventListener('change', () => {
+      if (sessionActive && !sessionRevealAllowedAtStart) {
+        return;
+      }
+      renderText();
+    });
+
+    minusMinute.addEventListener('click', () => adjustTimer(-1));
+    plusMinute.addEventListener('click', () => adjustTimer(1));
+
+    copyBtn.addEventListener('click', handleCopy);
+    saveBtn.addEventListener('click', handleSave);
+    discardBtn.addEventListener('click', handleDiscard);
+    newSessionBtn.addEventListener('click', handleNewSession);
+    closeModalBtn.addEventListener('click', closeModal);
+
+    document.addEventListener('keydown', handleKeyDown, { capture: true });
+    document.addEventListener('mousedown', handleMouseDown, { capture: true });
+    modalBackdrop.addEventListener('keydown', trapFocus);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('resize', () => {
+      updateMetrics();
+      updateCursor();
+    });
+
+    updateMetrics();
+    updateCountdown();
+    updateTimerControls();
+    updateCursor();
+  </script>
+</body>
+</html>
